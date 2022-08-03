@@ -47,7 +47,7 @@ import java.util.UUID;
 public class MainActivity extends FlutterActivity {
     private final static String TAG = "GATT SERVER";
     private static final String CHANNEL = "com.example.nuova_tebe_installatore/GATTserver";
-    private String STATUS = "SEND CMD FLAG";
+    private String STATUS = "SEND ENABLE CONF";
     private BluetoothGattCharacteristic mNotifyCharacteristic;
     private BluetoothManager mBluetoothManager;
     private BluetoothGattServer mBluetoothGattServer;
@@ -61,6 +61,11 @@ public class MainActivity extends FlutterActivity {
     private static final int PERMISSION_REQUEST_COARSE_LOCATION = 456;
 
     private String numInmpianto="25";
+    private String flag = "NFC+125KHz";
+    byte[] cmd = null;
+    public String numImpiantoInverted = "";
+
+
 
     public void setNumeroImpianto(String nImp){
         numInmpianto=nImp;
@@ -69,13 +74,20 @@ public class MainActivity extends FlutterActivity {
         return numInmpianto;
     }
 
+    public void setFlag(String f){
+        flag=f;
+    }
+
+    public String getFlag(){
+        return flag;
+    }
+
     @Override
     public void configureFlutterEngine(@NonNull FlutterEngine flutterEngine) {
         super.configureFlutterEngine(flutterEngine);
         methodChannel= new MethodChannel(flutterEngine.getDartExecutor().getBinaryMessenger(), CHANNEL);
         methodChannel.setMethodCallHandler(
                         (call, result) -> {
-
                             if (call.method.equals("startGattServer")) {
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                                     requestPermissions(new String[]{Manifest.permission.ACCESS_COARSE_LOCATION}, PERMISSION_REQUEST_COARSE_LOCATION);
@@ -89,11 +101,21 @@ public class MainActivity extends FlutterActivity {
                         
                                 registerReceiver(mBluetoothReceiver, filter);
                                 startServer();
-                                result.success("bll");
+                                result.success("servizio startato");
                             } else if(call.method.equals("setPlant")) {
                                 Log.w(TAG, (String) call.arguments);
                                 setNumeroImpianto((String) call.arguments);
-                                result.success("bll");
+                                result.success("plant settato");
+                            }
+                            else if(call.method.equals("setFlag")) {
+                                Log.w(TAG, (String) call.arguments);
+                                setFlag((String) call.arguments);
+                                result.success("flag settato");
+                            }
+                            else if(call.method.equals("setStatus")) {
+                                Log.w(TAG, (String) call.arguments);
+                                setSTATUS((String) call.arguments);
+                                result.success("stato settato");
                             }
                             else
                             {
@@ -158,8 +180,6 @@ public class MainActivity extends FlutterActivity {
 
 
     private void startServer() {
-
-
         Log.w(TAG, "Start GATT server");
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
             Log.w(TAG, "Permessi non concessi");
@@ -249,7 +269,6 @@ Log.w(TAG, String.valueOf(ActivityCompat.checkSelfPermission(this, Manifest.perm
             Log.w(TAG, "text from value " + text);
 
             //Log.w(TAG, text);
-            byte[] cmd = null;
             //txtnumImpianto = ((TextView) findViewById(R.id.txtnumImpianto));
             if (text.contentEquals("PING!\0")) {
                 Log.w(TAG, "Comunicazione ok");
@@ -263,20 +282,52 @@ Log.w(TAG, String.valueOf(ActivityCompat.checkSelfPermission(this, Manifest.perm
 
                     cmd = new byte[]{(byte) 0x43, (byte) 0x80};
                     setSTATUS("SEND READ FLAG");
-                    methodChannel.invokeMethod("send", cmd);
-
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            methodChannel.invokeMethod("send", cmd);
+                        }
+                    });
                 } else if (getSTATUS().equalsIgnoreCase("SEND READ FLAG")) {
                     Log.w(TAG, value.toString());
-                    //TODO settare la radio button
-
+                    if(value[2] == (byte)0x01){
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                methodChannel.invokeMethod("read_flag", 1);
+                            }
+                        });
+                    }
+                    else if(value[2] == (byte)0x00){
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                methodChannel.invokeMethod("read_flag", 0);
+                            }
+                        });
+                    }
+                    else if(value[2] == (byte)0x02){
+                        ///nuovo caso da gestire
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                methodChannel.invokeMethod("read_flag", 2);
+                            }
+                        });
+                    }
 
                     cmd = new byte[]{(byte) 0x43, (byte) 0x81};
                     setSTATUS("SEND READ PLANT");
-                    methodChannel.invokeMethod("send", cmd);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            methodChannel.invokeMethod("send", cmd);
+                        }
+                    });
 
                 } else if (getSTATUS().equalsIgnoreCase("SEND READ PLANT")) {
                     Log.w(TAG, value.toString());
-                    //TODO settare text inpianto
+                    numImpiantoInverted="";
 
                     byte[] ab = new byte[]{value[2], value[3], value[4], value[5]};
                     byte[] inverted = new byte[4];
@@ -287,10 +338,16 @@ Log.w(TAG, String.valueOf(ActivityCompat.checkSelfPermission(this, Manifest.perm
                     }
                     Integer nii = byteArrayToInt(inverted);
                     String nitext = nii.toString();
-                    String numImpiantoInverted = "";
                     for (int i = nitext.length(); i > 0; i--) {
                         numImpiantoInverted += nitext.charAt(i - 1);
                     }
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            methodChannel.invokeMethod("read_num_impianto", numImpiantoInverted);
+                        }
+                    });
+
 
 
                 }
@@ -298,19 +355,27 @@ Log.w(TAG, String.valueOf(ActivityCompat.checkSelfPermission(this, Manifest.perm
                 if (getSTATUS().equalsIgnoreCase("SEND ENABLE CONF")) {
 
 
-                    String flag = "NFC+125KHz"; ///mettere da chiamata da flutter
+                   ///mettere da chiamata da flutter
                     if (flag.equalsIgnoreCase("NFC+125KHz")) {
                         cmd = new byte[]{(byte) 0x43, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00};
                         setSTATUS("SEND CMD FLAG");
-                        methodChannel.invokeMethod("send", cmd);
-
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                methodChannel.invokeMethod("send", cmd);
+                            }
+                        });
 
                     } else if (flag.equalsIgnoreCase("NFC+125KHz+13MHz")) {
                         cmd = new byte[]{(byte) 0x43, (byte) 0x00, (byte) 0x01, (byte) 0x00, (byte) 0x00, (byte) 0x00};
                         setSTATUS("SEND CMD FLAG");
-                        methodChannel.invokeMethod("send", cmd);
 
-
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                methodChannel.invokeMethod("send", cmd);
+                            }
+                        });
                     }
 
 
@@ -341,7 +406,6 @@ Log.w(TAG, String.valueOf(ActivityCompat.checkSelfPermission(this, Manifest.perm
 
                         setSTATUS("SEND CMD PLANT");
 
-                        Log.w(TAG, "sono diego che scrive");
                         runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
