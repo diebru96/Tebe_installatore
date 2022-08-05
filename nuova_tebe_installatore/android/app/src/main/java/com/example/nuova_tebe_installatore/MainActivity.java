@@ -64,6 +64,9 @@ public class MainActivity extends FlutterActivity {
     private String flag = "NFC+125KHz";
     byte[] cmd = null;
     public String numImpiantoInverted = "";
+    Boolean esito= false;
+    int retry=3;
+    Boolean iniziaIncremento=false;
 
 
 
@@ -84,6 +87,7 @@ public class MainActivity extends FlutterActivity {
 
     @Override
     public void configureFlutterEngine(@NonNull FlutterEngine flutterEngine) {
+
         super.configureFlutterEngine(flutterEngine);
         methodChannel= new MethodChannel(flutterEngine.getDartExecutor().getBinaryMessenger(), CHANNEL);
         methodChannel.setMethodCallHandler(
@@ -115,7 +119,41 @@ public class MainActivity extends FlutterActivity {
                             else if(call.method.equals("setStatus")) {
                                 Log.w(TAG, (String) call.arguments);
                                 setSTATUS((String) call.arguments);
+                                if(((String) call.arguments).equalsIgnoreCase("SEND FIRMWARE")){
+                                    iniziaIncremento=false;
+                                    FwOffset=0;
+                                    FwIDX=0;
+                                    FwPhase=0;
+                                }
                                 result.success("stato settato");
+                            }
+                            else if(call.method.equals("setFile")) {
+                                FwOffset = 0;
+
+                                String fwString= (String) call.arguments;
+                                fwString= removeFirstandLast(fwString);
+                                fwString=fwString.replaceAll(" ","");
+                                String[] fwListString= fwString.split(",");
+                                Log.w(TAG,"setFile call method"+ fwListString[0] + " , "+ fwListString[1] + " , "+ fwListString[2]);
+                                mFirmwareLen= fwListString.length;
+                                Log.w(TAG, "Lunghezza stream byte "+String.valueOf(mFirmwareLen));
+
+                                mFirmwareData=new byte[(int) 200000];
+                                for(int i=0; i<fwListString.length; i++){
+
+                                    mFirmwareData[i]=(byte) Integer.parseInt(fwListString[i]);
+
+                                }
+                                Log.w(TAG,"M FW DATA "+ mFirmwareData[0] + " , "+ mFirmwareData[1] );
+
+                                Log.w(TAG,"VETTORE LENGHT"+  String.valueOf(mFirmwareData.length));
+
+                                result.success("file di byte settato");
+                            }
+                            else if(call.method.equals("setFileLenght")) {
+                                mFirmwareLen= (int) call.arguments;
+                                Log.w(TAG, (String) call.arguments);
+                                result.success("lunghezza settato");
                             }
                             else
                             {
@@ -123,8 +161,28 @@ public class MainActivity extends FlutterActivity {
                             }
                         }
                 );
+
     }
 
+
+    public static String removeFirstandLast(String str)
+    {
+
+        // Creating a StringBuilder object
+        StringBuilder sb = new StringBuilder(str);
+
+        // Removing the last character
+        // of a string
+        sb.deleteCharAt(str.length() - 1);
+
+        // Removing the first character
+        // of a string
+        sb.deleteCharAt(0);
+
+        // Converting StringBuilder into a string
+        // and return the modified string
+        return sb.toString();
+    }
 
 
 
@@ -144,20 +202,6 @@ public class MainActivity extends FlutterActivity {
 
 
 
-    private String getProva() {
-        int batteryLevel = -1;
-        if (VERSION.SDK_INT >= VERSION_CODES.LOLLIPOP) {
-            BatteryManager batteryManager = (BatteryManager) getSystemService(BATTERY_SERVICE);
-            batteryLevel = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY);
-        } else {
-            Intent intent = new ContextWrapper(getApplicationContext()).
-                    registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
-            batteryLevel = (intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) * 100) /
-                    intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
-        }
-        String batteriaProva = "sono una prova del channel con batteria batteryLevel" + batteryLevel;
-        return batteriaProva;
-    }
 
     private BroadcastReceiver mBluetoothReceiver = new BroadcastReceiver() {
         @Override
@@ -201,13 +245,6 @@ Log.w(TAG, String.valueOf(ActivityCompat.checkSelfPermission(this, Manifest.perm
         if (mBluetoothGattServer == null) return;
         Log.w(TAG, "stop GATT server");
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            // TODO: Consider calling
-            //    ActivityCompat#requestPermissions
-            // here to request the missing permissions, and then overriding
-            //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
-            //                                          int[] grantResults)
-            // to handle the case where the user grants the permission. See the documentation
-            // for ActivityCompat#requestPermissions for more details.
             return;
         }
         mBluetoothGattServer.close();
@@ -257,7 +294,7 @@ Log.w(TAG, String.valueOf(ActivityCompat.checkSelfPermission(this, Manifest.perm
                                                  int offset, byte[] value) {
 
 
-            Log.w(TAG, "SCRIVO su onCharacteristicWriteRequest " + value);
+        //    Log.w(TAG, "SCRIVO su onCharacteristicWriteRequest " + value);
 
 
 
@@ -266,16 +303,31 @@ Log.w(TAG, String.valueOf(ActivityCompat.checkSelfPermission(this, Manifest.perm
 
             //Log.w(TAG, "Characteristic Write: " + characteristic.getUuid());
             String text = new String(value, StandardCharsets.US_ASCII);
-            Log.w(TAG, "text from value " + text);
+         //   Log.w(TAG, "text from value " + text);
 
             //Log.w(TAG, text);
             //txtnumImpianto = ((TextView) findViewById(R.id.txtnumImpianto));
             if (text.contentEquals("PING!\0")) {
                 Log.w(TAG, "Comunicazione ok");
 
-            } else if (text.contentEquals("C:ACK\0") || text.contentEquals("NACK\0") || (value[0] == (byte) 0x43 && value[1] == (byte) 0x80) || (value[0] == (byte) 0x43 && value[1] == (byte) 0x81)) {
+            }
+            else if((value[0] == (byte) 0x56 && value[1] == (byte) 0x3A)){
 
-                Log.w(TAG, "ack o nack"+ text);
+
+                int version=Byte.toUnsignedInt(value[2])+Byte.toUnsignedInt((byte) (value[3]<<8))+Byte.toUnsignedInt((byte) (value[3]<<16))+Byte.toUnsignedInt((byte) (value[3]<<24));
+
+
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        methodChannel.invokeMethod("read_version", String.valueOf(version));
+                    }
+                });
+            }
+            else if (text.contentEquals("C:ACK\0") || text.contentEquals("NACK\0") || (value[0] == (byte) 0x43 && value[1] == (byte) 0x80) || (value[0] == (byte) 0x43 && value[1] == (byte) 0x81)) {
+
+                Log.w(TAG, "ack o nack: "+ text);
+
 
 
                 if (getSTATUS().equalsIgnoreCase("SEND ENABLE CONF READ")) {
@@ -289,24 +341,26 @@ Log.w(TAG, String.valueOf(ActivityCompat.checkSelfPermission(this, Manifest.perm
                         }
                     });
                 } else if (getSTATUS().equalsIgnoreCase("SEND READ FLAG")) {
+
                     Log.w(TAG, value.toString());
-                    if(value[2] == (byte)0x01){
+
+                    if (!text.contentEquals("NACK\0")) {
+
+                    if (value[2] == (byte) 0x01) {
                         runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
                                 methodChannel.invokeMethod("read_flag", 1);
                             }
                         });
-                    }
-                    else if(value[2] == (byte)0x00){
+                    } else if (value[2] == (byte) 0x00) {
                         runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
                                 methodChannel.invokeMethod("read_flag", 0);
                             }
                         });
-                    }
-                    else if(value[2] == (byte)0x02){
+                    } else if (value[2] == (byte) 0x02) {
                         ///nuovo caso da gestire
                         runOnUiThread(new Runnable() {
                             @Override
@@ -315,6 +369,7 @@ Log.w(TAG, String.valueOf(ActivityCompat.checkSelfPermission(this, Manifest.perm
                             }
                         });
                     }
+
 
                     cmd = new byte[]{(byte) 0x43, (byte) 0x81};
                     setSTATUS("SEND READ PLANT");
@@ -325,35 +380,71 @@ Log.w(TAG, String.valueOf(ActivityCompat.checkSelfPermission(this, Manifest.perm
                         }
                     });
 
+                }
+
                 } else if (getSTATUS().equalsIgnoreCase("SEND READ PLANT")) {
                     Log.w(TAG, value.toString());
                     numImpiantoInverted="";
 
-                    byte[] ab = new byte[]{value[2], value[3], value[4], value[5]};
-                    byte[] inverted = new byte[4];
-                    int index = 0;
-                    for (int z = ab.length - 1; z >= 0; z--) {
-                        inverted[index] = ab[z];
-                        index++;
-                    }
-                    Integer nii = byteArrayToInt(inverted);
-                    String nitext = nii.toString();
-                    for (int i = nitext.length(); i > 0; i--) {
-                        numImpiantoInverted += nitext.charAt(i - 1);
-                    }
-                    runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            methodChannel.invokeMethod("read_num_impianto", numImpiantoInverted);
+                    if (!text.contentEquals("NACK\0")) {
+
+
+                        byte[] ab = new byte[]{value[2], value[3], value[4], value[5]};
+                        byte[] inverted = new byte[4];
+                        int index = 0;
+                        for (int z = ab.length - 1; z >= 0; z--) {
+                            inverted[index] = ab[z];
+                            index++;
                         }
-                    });
+                        Integer nii = byteArrayToInt(inverted);
+                        String nitext = nii.toString();
+                        for (int i = nitext.length(); i > 0; i--) {
+                            numImpiantoInverted += nitext.charAt(i - 1);
+                        }
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                methodChannel.invokeMethod("read_num_impianto", numImpiantoInverted);
+                            }
+                        });
+                    }
+                    else
+                    {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                methodChannel.invokeMethod("read_num_impianto", "Lettura fallita");
+                            }
+                        });
+                    }
 
 
 
                 }
 
+
+                if(getSTATUS().equalsIgnoreCase("REBOOT")){
+                    cmd = new byte[]{(byte) 0x43, (byte) 0x82};
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            methodChannel.invokeMethod("send", cmd);
+                        }
+                    });
+                }
+
                 if (getSTATUS().equalsIgnoreCase("SEND ENABLE CONF")) {
 
+                   if( text.contentEquals("C:ACK\0"))
+                   {
+                       Log.w(TAG,"Scrittura enable config avvenuta correttamente");
+                       esito=true;
+                   }
+                   else if(text.contentEquals("NACK\0"))
+                   {
+                       Log.w(TAG,"Scrittura enable config fallita");
+                       esito=false;
+                   }
 
                    ///mettere da chiamata da flutter
                     if (flag.equalsIgnoreCase("NFC+125KHz")) {
@@ -377,10 +468,32 @@ Log.w(TAG, String.valueOf(ActivityCompat.checkSelfPermission(this, Manifest.perm
                             }
                         });
                     }
+                    else if (flag.equalsIgnoreCase("125KHz+13MHz")) {
+                        cmd = new byte[]{(byte) 0x43, (byte) 0x00, (byte) 0x02, (byte) 0x00, (byte) 0x00, (byte) 0x00};
+                        setSTATUS("SEND CMD FLAG");
+
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                methodChannel.invokeMethod("send", cmd);
+                            }
+                        });
+                    }
+
 
 
                 } else if (getSTATUS().equalsIgnoreCase("SEND CMD FLAG")) {
                     Log.w(TAG, "SEND CMD FLAG");
+                    if( text.contentEquals("C:ACK\0"))
+                    {
+                        Log.w(TAG,"Scrittura SEND CMD FLAG avvenuta correttamente");
+                            esito=true;
+                    }
+                    else if(text.contentEquals("NACK\0"))
+                    {
+                        Log.w(TAG,"Scrittura SEND CMD FLAG fallita");
+                        esito=false;
+                    }
 
                     cmd = new byte[]{(byte) 0x43, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00, (byte) 0x00};
 
@@ -418,43 +531,124 @@ Log.w(TAG, String.valueOf(ActivityCompat.checkSelfPermission(this, Manifest.perm
 
                     }
                 } else if (getSTATUS().equalsIgnoreCase("SEND CMD PLANT")) {
+                        //last one if everything correct return esito true
+                    if( text.contentEquals("C:ACK\0"))
+                    {
+                        Log.w(TAG,"Scrittura SEND CMD PLANT avvenuta correttamente");
+                        if(esito)
+                            esito=true;
+                    }
+                    else if(text.contentEquals("NACK\0"))
+                    {
+                        Log.w(TAG,"Scrittura SEND CMD PLANT fallita");
+                        esito=false;
+                    }
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            Log.w(TAG, "sono nell'ui thread");
+
+                            methodChannel.invokeMethod("scrittura_corretta", esito);
+                        }
+                    });
+
 
                 }
 
 
-            } else if (text.contentEquals("U:ACK\0") || text.contentEquals("U:COK\0")) {
-              /**  if (getSTATUS().equalsIgnoreCase("SEND FIRMWARE")) {
+            } else if (text.contentEquals("U:ACK\0") || text.contentEquals("U:COK\0") || text.contentEquals("U:NACK\0")) {
+                if (getSTATUS().equalsIgnoreCase("SEND FIRMWARE")) {
 
-                    if (FwPhase == 0) {
-                        cmd = new byte[]{(byte) 0x55, (byte) 0x3}; // erase signature
-                        characteristica.setValue(cmd);
-                        if (!gattMy.writeCharacteristic(characteristica)) {
-                            Log.w(TAG, "cannot write");
-                        } else
+                    if (FwPhase == 0 || (text.contentEquals("U:NACK\0") && FwPhase == 1)) {
+           //             Log.w(TAG, "FASE 0 con FwFase="+FwPhase);
+
+                        if(text.contentEquals("U:NACK\0"))
+                        {
+                            retry=retry-1;
+                        }
+                        else
+                        {
+                            retry=3;
                             FwPhase = 1;
-                    } else if (FwPhase == 1) {
-                        cmd = new byte[]{(byte) 0x55, (byte) 0x4}; // erase flash
-                        characteristica.setValue(cmd);
-                        if (!gattMy.writeCharacteristic(characteristica)) {
-                            Log.w(TAG, "cannot write");
-                        } else
+                        }
+                        cmd = new byte[]{(byte) 0x55, (byte) 0x3}; // erase signature
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                methodChannel.invokeMethod("send_fw_chunk", cmd);
+                            }
+                        });
+                    } else if (FwPhase == 1 || (text.contentEquals("U:NACK\0") && FwPhase == 2) ) {
+                     //   Log.w(TAG, "FASE 1 con FwFase="+FwPhase);
+
+                        if(text.contentEquals("U:NACK\0"))
+                        {
+                            retry=retry-1;
+                        }
+                        else
+                        {
+                            retry=3;
                             FwPhase = 2;
-                    } else if (FwPhase == 2) {
-                        cmd = new byte[]{(byte) 0x55, (byte) 0x2, (byte) 0xa5, (byte) 0x5a};
-                        characteristica.setValue(cmd);
-                        if (!gattMy.writeCharacteristic(characteristica)) {
-                            Log.w(TAG, "cannot write");
-                        } else
+                        }
+                        cmd = new byte[]{(byte) 0x55, (byte) 0x4}; // erase flash
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                methodChannel.invokeMethod("send_fw_chunk", cmd);
+                            }
+                        });
+                    } else if (FwPhase == 2 || (text.contentEquals("U:NACK\0") && FwPhase == 3) ) {
+                       // Log.w(TAG, "FASE 2 con FwFase="+FwPhase);
+
+                        if(text.contentEquals("U:NACK\0"))
+                        {
+                            retry=retry-1;
+                        }
+                        else
+                        {
+                            retry=3;
                             FwPhase = 3;
-                    } else if (FwOffset < mFirmwareLen) {
+                        }
+                        cmd = new byte[]{(byte) 0x55, (byte) 0x2, (byte) 0xa5, (byte) 0x5a};
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                methodChannel.invokeMethod("send_fw_chunk", cmd);
+                            }
+                        });
+                    }
+                    else if (FwOffset < mFirmwareLen) {
+
+                     //   Log.w(TAG, "FASE 3 (SCRITTURA FILE EFFETTIVA) con FwFase="+FwPhase);
+
+                        if(text.contentEquals("U:NACK\0"))
+                        {
+                            Log.w(TAG, "FACCIO RETRY, ricevuto NACK");
+                            retry=retry-1;
+                        }
+                        else
+                        {
+                            retry=3;
+                            if(iniziaIncremento) {
+                                FwOffset += chunkdim;
+                                FwIDX++;
+                      //          Log.w(TAG, "FwOffset="+ FwOffset);
+                            }
+                        }
+
+
+                    if(FwOffset < mFirmwareLen) {
+
                         if (FwOffset == 0) FwIDX = 0;
 
                         cmd = new byte[4 + chunkdim];
                         cmd[0] = 0x55;
-                        if ((mFirmwareLen - FwOffset) > chunkdim)
+                        if ((mFirmwareLen - FwOffset) > chunkdim) {
                             cmd[1] = 0x00;
-                        else
+                        } else {
+                            Log.w(TAG, "ULTIMO PACCHETTO con fwlen: " + String.valueOf(mFirmwareLen) + " e fwOffset: " + FwOffset);
                             cmd[1] = 0x01;  // ultimo pacchetto
+                        }
 
                         if ((FwIDX > 0) && ((FwIDX & 0xff) == 0)) FwIDX++;
                         cmd[2] = (byte) (FwIDX & 0xff);
@@ -468,19 +662,35 @@ Log.w(TAG, String.valueOf(ActivityCompat.checkSelfPermission(this, Manifest.perm
                                 cmd[i] = (byte) 0xff;
                             // L'ultimo pacchetto non restituisce ACK perché il lettore si disconnette
                         }
+
                         //setSTATUS("SEND FIRMWARE");
-                        characteristica.setValue(cmd);
-                        if (!gattMy.writeCharacteristic(characteristica)) {
-                            Log.w(TAG, "cannot write");
-                        } else {
-                            FwOffset += chunkdim;
-                            FwIDX++;
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                methodChannel.invokeMethod("send_fw_chunk", cmd);
+                                  methodChannel.invokeMethod("updatePBar", FwOffset + chunkdim);
+                            }
+                        });
+
+
+               //         Log.w(TAG, String.valueOf(FwOffset));
+
+                        if (FwOffset == 0) {
+                            iniziaIncremento = true;
                         }
-                    } else {
+                    }
+                    else
+                    {
+                        Log.w(TAG, "ho fwOffset>= Fwlen");
+                    }
+                } else {
+                        Log.w(TAG, "FWOFFSET HA SUPERATO FWLEN");
+                        iniziaIncremento=false;
                         FwPhase = 0;
+                        FwOffset=0;
                     }
 
-                }*/
+                }
             } else {
 
                 if (getSTATUS().equalsIgnoreCase("SEND ENABLE CONF"))
@@ -492,8 +702,18 @@ Log.w(TAG, String.valueOf(ActivityCompat.checkSelfPermission(this, Manifest.perm
                 else if (getSTATUS().equalsIgnoreCase("SEND FIRMWARE")) {
                     Log.w(TAG, "Errore aggiornamento firmware");
                     FwPhase = 0;
+                    FwOffset=0;
+                    iniziaIncremento=false;
                 } else
                     Log.w(TAG, "Errore di comunicazione");
+            }
+
+            if(retry<=0){
+                Log.w(TAG, "retry esaurito, STACCAH STACCAH");
+                FwPhase = 0;
+                FwOffset=0;
+                iniziaIncremento=false;
+                retry=3;
             }
         }
 

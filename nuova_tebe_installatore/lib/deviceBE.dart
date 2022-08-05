@@ -1,11 +1,15 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:auto_size_text/auto_size_text.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:nuova_tebe_installatore/main.dart';
 import 'package:nuova_tebe_installatore/neumorphic_button.dart';
+import 'dart:io';
+import 'dart:typed_data';
 
 class DeviceBE extends StatefulWidget {
   DeviceBE({Key? key, required this.deviceServices, required this.device})
@@ -28,11 +32,23 @@ class _DeviceBEState extends State<DeviceBE> {
     ];
   }
 
+  List<int> _getBytesVersion() {
+    return [
+      86,
+      58,
+    ];
+  }
+
+  List<int> _getBytesSbloccoFw() {
+    return [85, 2, 165, 90];
+  }
+
   final formkey = GlobalKey<FormState>();
 
   List<BluetoothService> services = [];
 
   String ritorno = "";
+  bool finishedUpdateFw = false;
 
   @override
   void dispose() {
@@ -44,6 +60,7 @@ class _DeviceBEState extends State<DeviceBE> {
   static const platform =
       MethodChannel('com.example.nuova_tebe_installatore/GATTserver');
 
+  int n_puntini = 0;
   Future<void> _onMethodReceive(call) async {
     if (call.method == 'prova') {
       setState(() {
@@ -51,11 +68,11 @@ class _DeviceBEState extends State<DeviceBE> {
       });
     } else if (call.method == 'send') {
       if (blc != null) {
-        print("sono in send (method receive)");
         print(call.arguments.toString());
         List<int> bytetoWrite = [];
         bytetoWrite = call.arguments;
         blc!.write(bytetoWrite, withoutResponse: true).then((value) async {
+          print(" RES " + value.toString());
           print("ho scritto " + call.arguments.toString());
           setState(() {
             ritorno = "ho scritto " + call.arguments.toString();
@@ -68,18 +85,84 @@ class _DeviceBEState extends State<DeviceBE> {
         myController.text = "";
         myController.text = call.arguments.toString();
       });
+      //LEGGO VERSIONE
+      blc!.write(_getBytesVersion(), withoutResponse: true).then((value) async {
+        setState(() {
+          ritorno = "Lettura versione";
+          loading = false;
+        });
+      });
     } else if (call.method == 'read_flag') {
       setState(() {
         selectedConfig = call.arguments;
       });
+    } else if (call.method == 'read_version') {
+      setState(() {
+        version = call.arguments;
+      });
+    } else if (call.method == 'scrittura_corretta') {
+      setState(() {
+        showEsito = true;
+        esito = call.arguments;
+      });
+    } else if (call.method == 'send_fw_chunk') {
+      // print(call.arguments.toString());
+      List<int> bytetoWrite = [];
+      bytetoWrite = call.arguments;
+      blc!.write(bytetoWrite, withoutResponse: true).then((value) async {
+        // print("ricevuto da fwUpdate " + call.arguments.toString());
+        setState(() {
+          n_puntini++;
+          n_puntini = n_puntini % 9;
+          if (n_puntini == 0) {
+            ritorno = "Aggiornamento firmware in corso .";
+          } else if (n_puntini == 3) {
+            ritorno = "Aggiornamento firmware in corso ..";
+          } else if (n_puntini == 6) {
+            ritorno = "Aggiornamento firmware in corso ...";
+          }
+        });
+      });
+    } else if (call.method == 'updatePBar') {
+      // print("UPDATE BAR");
+      setState(() {
+        offset = call.arguments;
+
+        setState(() {
+          progressLoading =
+              ((MediaQuery.of(context).size.width - 66) * offset) / total;
+        });
+
+        if ((offset + 128) >= total) {
+          setState(() {
+            updating_firmware = false;
+            isUpdatingFirmware = false;
+            finishedUpdateFw = true;
+            print("updating_firmware " +
+                updating_firmware.toString() +
+                " isUpdatingFirmware:" +
+                isUpdatingFirmware.toString() +
+                " finishedUpdateFw: " +
+                finishedUpdateFw.toString());
+          });
+        }
+      });
     }
   }
+
+  int total = 0;
+  int offset = 0;
 
   String plantNumber = "1";
   int selectedConfig = 0;
   bool loading = false;
   TextEditingController myController = TextEditingController()..text = '';
   bool updating_firmware = false;
+  String version = "-1";
+  Directory? _downloadsDirectory;
+  bool showEsito = false;
+  bool esito = true;
+  BluetoothDeviceState deviceState = BluetoothDeviceState.connected;
 
   @override
   void initState() {
@@ -109,8 +192,47 @@ class _DeviceBEState extends State<DeviceBE> {
         }
       }
     }
-
+    listenToStateChange();
     super.initState();
+  }
+
+  listenToStateChange() {
+    widget.device.state.listen((event) {
+      deviceState = event;
+      if (deviceState == BluetoothDeviceState.connecting) {
+        print("DEVICE IS CONNECTING");
+      }
+      if (deviceState == BluetoothDeviceState.connected) {
+        print("DEVICE IS CONNECTED " + isUpdatingFirmware.toString());
+        /*  if (!isUpdatingFirmware) {
+          print("finupfw " + finishedUpdateFw.toString());
+          print("LEGGO");
+          readData();
+        }
+        */
+      }
+      if (deviceState == BluetoothDeviceState.disconnecting) {
+        print("DEVICE IS DISCONNECTING");
+      }
+      if (deviceState == BluetoothDeviceState.disconnected) {
+        print("DEVICE DISCONNECTED");
+        if (isUpdatingFirmware || finishedUpdateFw) {
+          widget.device.connect().then((value) async {
+            if (!finishedUpdateFw) {
+              int mtu = await widget.device.requestMtu(240);
+              print("MTU " + mtu.toString());
+              sbloccoFirmware();
+            } else {
+              readData();
+            }
+
+            setState(() {
+              finishedUpdateFw = false;
+            });
+          });
+        }
+      }
+    });
   }
 
   setPlantValue(String value) async {
@@ -127,7 +249,7 @@ class _DeviceBEState extends State<DeviceBE> {
         value = "NFC+125KHz+13MHz";
         break;
       case 2:
-        value = "UNKNOWN";
+        value = "125KHz+13MHz";
         break;
     }
 
@@ -153,15 +275,6 @@ class _DeviceBEState extends State<DeviceBE> {
               child: Icon(Icons.info_outline_rounded),
             ),
           ),
-          InkWell(
-            onTap: () async {
-              await readData();
-            },
-            child: Padding(
-              padding: EdgeInsets.only(right: 15),
-              child: Icon(Icons.read_more_outlined),
-            ),
-          ),
         ],
       ),
       backgroundColor: singleton.backgroundColor,
@@ -179,8 +292,56 @@ class _DeviceBEState extends State<DeviceBE> {
                   Center(
                     child: Text(ritorno),
                   ),
+                  if (showEsito)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12.0),
+                      child: Center(
+                          child: esito
+                              ? Icon(Icons.check, color: Colors.green, size: 26)
+                              : Icon(
+                                  Icons.close,
+                                  color: Colors.red,
+                                  size: 26,
+                                )),
+                    ),
                   SizedBox(
-                    height: 30,
+                    height: showEsito ? 18 : 30,
+                  ),
+                  Container(
+                    width: MediaQuery.of(context).size.width,
+                    height: 70,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: NeumorphicButton(
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceEvenly,
+                                children: [
+                                  Icon(Icons.book_outlined),
+                                  Text("Leggi"),
+                                ],
+                              ),
+                              action: () {
+                                readData();
+                              }),
+                        ),
+                        Expanded(
+                          child: NeumorphicButton(
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceEvenly,
+                                children: [
+                                  Icon(Icons.refresh),
+                                  Text("Reboot"),
+                                ],
+                              ),
+                              action: () {
+                                reboot();
+                              }),
+                        ),
+                      ],
+                    ),
                   ),
                   ListTile(
                     title: Text('NFC+125KHz'),
@@ -209,7 +370,7 @@ class _DeviceBEState extends State<DeviceBE> {
                     ),
                   ),
                   ListTile(
-                    title: Text('New config'),
+                    title: Text('125KHz+13MHz'),
                     leading: Radio<int>(
                       activeColor: singleton.primaryColor,
                       value: 2,
@@ -252,6 +413,11 @@ class _DeviceBEState extends State<DeviceBE> {
                               )))
                     ],
                   ),
+                  Center(
+                      child: Text(
+                    "Versione: $version",
+                    style: TextStyle(color: singleton.primaryColor),
+                  )),
                   if (updating_firmware) loadingBar()
                 ],
               ),
@@ -269,13 +435,26 @@ class _DeviceBEState extends State<DeviceBE> {
     );
   }
 
+  reboot() async {
+    await platform.invokeMethod('setStatus', "REBOOT");
+    if (blc != null) {
+      blc!.write(_getBytesSblocco(), withoutResponse: true).then((value) async {
+        setState(() {
+          ritorno = "Reboot in corso";
+        });
+      });
+    }
+  }
+
   readData() async {
+    setState(() {
+      showEsito = false;
+    });
     await platform.invokeMethod('setStatus', "SEND ENABLE CONF READ");
     if (blc != null) {
       blc!.write(_getBytesSblocco(), withoutResponse: true).then((value) async {
         setState(() {
           ritorno = "Configurazione in corso";
-          loading = false;
         });
       });
     }
@@ -329,7 +508,7 @@ class _DeviceBEState extends State<DeviceBE> {
             TextFormField(
               controller: myController,
               decoration: InputDecoration(
-                  labelText: 'PLANT',
+                  labelText: 'INST',
                   focusedBorder: UnderlineInputBorder(
                       borderSide: BorderSide(color: singleton.primaryColor))),
               validator: (input) => input!.isEmpty ? "Plant non valido" : null,
@@ -370,26 +549,32 @@ class _DeviceBEState extends State<DeviceBE> {
     }
   }
 
-  _updateFirmare() {
+  bool isUpdatingFirmware = false;
+
+  sbloccoFirmware() async {
+    if (blc != null)
+      await blc!.write(_getBytesSbloccoFw(), withoutResponse: true);
+  }
+
+  _updateFirmare() async {
+    setState(() {
+      isUpdatingFirmware = true;
+    });
+    var bytes = await inputDatePickerFormField();
+    setState(() {
+      total = bytes!.length;
+    });
+    int mtu = await widget.device.requestMtu(240);
+    print("MTU " + mtu.toString());
+    await platform.invokeMethod('setStatus', "SEND FIRMWARE");
+    await platform.invokeMethod('setFile', bytes.toString());
+    await sbloccoFirmware();
     setState(() {
       updating_firmware = true;
-      progressLoading = 10;
+      progressLoading = 0;
     });
-    Timer t = Timer.periodic(Duration(milliseconds: 350), (_) {
-      setState(() {
-        if (progressLoading < MediaQuery.of(context).size.width - 70) {
-          if (progressLoading < MediaQuery.of(context).size.width - 120) {
-            progressLoading = progressLoading + 50;
-          } else {
-            progressLoading = MediaQuery.of(context).size.width - 70;
-          }
-        }
-      });
-    });
-    Future.delayed(Duration(seconds: 3)).then((value) => setState(() {
-          updating_firmware = false;
-          t.cancel();
-        }));
+
+    ///CONSIDERIAMO BARRA LUN TOTALE=  MediaQuery.of(context).size.width-66
   }
 
   openPerformanceImpiantiCard(BuildContext context) {
@@ -473,5 +658,24 @@ class _DeviceBEState extends State<DeviceBE> {
                     ),
                   ),
                 ))));
+  }
+
+  Future<Uint8List?> inputDatePickerFormField() async {
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['bin'],
+    );
+
+    if (result != null) {
+      File file = File(result.files.single.path!);
+      Uint8List bytes = file.readAsBytesSync();
+      print("STAMPO BYTE FW");
+      print(bytes.toString());
+      print("BYTE LENGHT " + bytes.length.toString());
+
+      return bytes;
+    } else {
+      return null;
+    }
   }
 }
